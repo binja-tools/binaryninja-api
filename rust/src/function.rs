@@ -274,7 +274,7 @@ impl Function {
         unsafe { Type::ref_from_raw(BNGetFunctionType(self.handle)) }
     }
 
-    pub fn set_user_type(&self, t: Type) {
+    pub fn set_user_type(&self, t: &Type) {
         unsafe {
             BNSetFunctionUserType(self.handle, t.handle);
         }
