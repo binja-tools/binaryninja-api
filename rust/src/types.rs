@@ -410,12 +410,12 @@ impl TypeBuilder {
         }
     }
 
-    pub fn calling_convention(&self) -> Result<Conf<Ref<CallingConvention<CoreArchitecture>>>> {
+    pub fn calling_convention(&self) -> Option<Conf<Ref<CallingConvention<CoreArchitecture>>>> {
         let convention_confidence = unsafe { BNGetTypeBuilderCallingConvention(self.handle) };
         if convention_confidence.convention.is_null() {
-            Err(())
+            None
         } else {
-            Ok(convention_confidence.into())
+            Some(convention_confidence.into())
         }
     }
 
@@ -487,6 +487,14 @@ impl TypeBuilder {
         unsafe { BNGetTypeBuilderOffset(self.handle) }
     }
 
+    pub fn alt_name(&self) -> &BnStr {
+        unsafe { BnStr::from_raw(BNGetTypeBuilderAlternateName(self.handle)) }
+    }
+
+    pub fn ref_type(&self) -> ReferenceType {
+        unsafe { BNTypeBuilderGetReferenceType(self.handle) }
+    }
+
     pub fn stack_adjustment(&self) -> Conf<i64> {
         unsafe { BNGetTypeBuilderStackAdjustment(self.handle).into() }
     }
@@ -518,15 +526,15 @@ impl TypeBuilder {
         }
     }
 
-    pub fn named_int<S: BnStrCompatible>(width: usize, is_signed: bool, alt_name: S) -> Self {
-        let mut is_signed = Conf::new(is_signed, max_confidence()).into();
+    pub fn named_int<S: BnStrCompatible, T: Into<Conf<bool>>>(width: usize, is_signed: T, alt_name: S) -> Self {
         // let alt_name = BnString::new(alt_name);
         let alt_name = alt_name.into_bytes_with_nul(); // This segfaulted once, so the above version is there if we need to change to it, but in theory this is copied into a `const string&` on the C++ side; I'm just not 100% confident that a constant reference copies data
+        let mut bool_with_confidence = is_signed.into().into();
 
         unsafe {
             Self::from_raw(BNCreateIntegerTypeBuilder(
                 width,
-                &mut is_signed,
+                &mut bool_with_confidence,
                 alt_name.as_ref().as_ptr() as _,
             ))
         }
@@ -580,7 +588,7 @@ impl TypeBuilder {
         unsafe { Self::from_raw(BNCreateStructureTypeBuilder(structure_type.handle)) }
     }
 
-    pub fn named_type(type_reference: NamedTypeReference) -> Self {
+    pub fn named_type(type_reference: &NamedTypeReference) -> Self {
         let mut is_const = Conf::new(false, min_confidence()).into();
         let mut is_volatile = Conf::new(false, min_confidence()).into();
         unsafe {
@@ -638,15 +646,15 @@ impl TypeBuilder {
         }
     }
 
-    pub fn pointer_of_width<'a, T: Into<Conf<&'a Type>>>(
+    pub fn pointer_of_width<'a, T: Into<Conf<&'a Type>>, C: Into<Conf<bool>>, V: Into<Conf<bool>>>(
         t: T,
         size: usize,
-        is_const: bool,
-        is_volatile: bool,
+        is_const: C,
+        is_volatile: V,
         ref_type: Option<ReferenceType>,
     ) -> Self {
-        let mut is_const = Conf::new(is_const, max_confidence()).into();
-        let mut is_volatile = Conf::new(is_volatile, max_confidence()).into();
+        let mut is_const = is_const.into().into();
+        let mut is_volatile = is_volatile.into().into();
 
         unsafe {
             Self::from_raw(BNCreatePointerTypeBuilderOfWidth(
@@ -659,15 +667,20 @@ impl TypeBuilder {
         }
     }
 
-    pub fn pointer_with_options<'a, A: Architecture, T: Into<Conf<&'a Type>>>(
+    pub fn pointer_with_options<
+        'a, A: Architecture,
+        T: Into<Conf<&'a Type>>,
+        C: Into<Conf<bool>>,
+        V: Into<Conf<bool>>
+    >(
         arch: &A,
         t: T,
-        is_const: bool,
-        is_volatile: bool,
+        is_const: C,
+        is_volatile: V,
         ref_type: Option<ReferenceType>,
     ) -> Self {
-        let mut is_const = Conf::new(is_const, max_confidence()).into();
-        let mut is_volatile = Conf::new(is_volatile, max_confidence()).into();
+        let mut is_const = is_const.into().into();
+        let mut is_volatile = is_volatile.into().into();
         unsafe {
             Self::from_raw(BNCreatePointerTypeBuilder(
                 arch.as_ref().0,
@@ -824,6 +837,14 @@ impl Type {
         unsafe { BNIsTypePure(self.handle).into() }
     }
 
+    pub fn alt_name(&self) -> &BnStr {
+        unsafe { BnStr::from_raw(BNGetTypeAlternateName(self.handle)) }
+    }
+
+    pub fn ref_type(&self) -> ReferenceType {
+        unsafe { BNTypeGetReferenceType(self.handle) }
+    }
+
     pub fn get_structure(&self) -> Result<Ref<Structure>> {
         let result = unsafe { BNGetTypeStructure(self.handle) };
         if result.is_null() {
@@ -907,15 +928,15 @@ impl Type {
         }
     }
 
-    pub fn named_int<S: BnStrCompatible>(width: usize, is_signed: bool, alt_name: S) -> Ref<Self> {
-        let mut is_signed = Conf::new(is_signed, max_confidence()).into();
+    pub fn named_int<S: BnStrCompatible, T: Into<Conf<bool>>>(width: usize, is_signed: T, alt_name: S) -> Ref<Self> {
         // let alt_name = BnString::new(alt_name);
         let alt_name = alt_name.into_bytes_with_nul(); // This segfaulted once, so the above version is there if we need to change to it, but in theory this is copied into a `const string&` on the C++ side; I'm just not 100% confident that a constant reference copies data
+        let mut bool_with_confidence = is_signed.into().into();
 
         unsafe {
             Self::ref_from_raw(BNCreateIntegerType(
                 width,
-                &mut is_signed,
+                &mut bool_with_confidence,
                 alt_name.as_ref().as_ptr() as _,
             ))
         }
@@ -991,13 +1012,18 @@ impl Type {
         }
     }
 
-    pub fn function<'a, S: BnStrCompatible + Clone, T: Into<Conf<&'a Type>>>(
+    pub fn function<
+        'a,
+        S: BnStrCompatible + Clone,
+        T: Into<Conf<&'a Type>>,
+        V: Into<Conf<bool>>,
+    >(
         return_type: T,
         parameters: &[FunctionParameter<S>],
-        variable_arguments: bool,
+        variable_arguments: V,
     ) -> Ref<Self> {
         let mut return_type = return_type.into().into();
-        let mut variable_arguments = Conf::new(variable_arguments, max_confidence()).into();
+        let mut variable_arguments = variable_arguments.into().into();
         let mut can_return = Conf::new(true, min_confidence()).into();
         let mut pure = Conf::new(false, min_confidence()).into();
 
@@ -1059,16 +1085,17 @@ impl Type {
         A: Architecture,
         S: BnStrCompatible + Clone,
         T: Into<Conf<&'a Type>>,
+        V: Into<Conf<bool>>,
         C: Into<Conf<&'a CallingConvention<A>>>,
     >(
         return_type: T,
         parameters: &[FunctionParameter<S>],
-        variable_arguments: bool,
+        variable_arguments: V,
         calling_convention: C,
         stack_adjust: Conf<i64>,
     ) -> Ref<Self> {
         let mut return_type = return_type.into().into();
-        let mut variable_arguments = Conf::new(variable_arguments, max_confidence()).into();
+        let mut variable_arguments = variable_arguments.into().into();
         let mut can_return = Conf::new(true, min_confidence()).into();
         let mut pure = Conf::new(false, min_confidence()).into();
         let mut raw_calling_convention: BNCallingConventionWithConfidence =
@@ -1159,15 +1186,15 @@ impl Type {
         }
     }
 
-    pub fn pointer_of_width<'a, T: Into<Conf<&'a Type>>>(
+    pub fn pointer_of_width<'a, T: Into<Conf<&'a Type>>, C: Into<Conf<bool>>, V: Into<Conf<bool>>>(
         t: T,
         size: usize,
-        is_const: bool,
-        is_volatile: bool,
+        is_const: C,
+        is_volatile: V,
         ref_type: Option<ReferenceType>,
     ) -> Ref<Self> {
-        let mut is_const = Conf::new(is_const, max_confidence()).into();
-        let mut is_volatile = Conf::new(is_volatile, max_confidence()).into();
+        let mut is_const = is_const.into().into();
+        let mut is_volatile = is_volatile.into().into();
         unsafe {
             Self::ref_from_raw(BNCreatePointerTypeOfWidth(
                 size,
@@ -1179,15 +1206,20 @@ impl Type {
         }
     }
 
-    pub fn pointer_with_options<'a, A: Architecture, T: Into<Conf<&'a Type>>>(
+    pub fn pointer_with_options<
+        'a, A: Architecture,
+        T: Into<Conf<&'a Type>>,
+        C: Into<Conf<bool>>,
+        V: Into<Conf<bool>>
+    >(
         arch: &A,
         t: T,
-        is_const: bool,
-        is_volatile: bool,
+        is_const: C,
+        is_volatile: V,
         ref_type: Option<ReferenceType>,
     ) -> Ref<Self> {
-        let mut is_const = Conf::new(is_const, max_confidence()).into();
-        let mut is_volatile = Conf::new(is_volatile, max_confidence()).into();
+        let mut is_const = is_const.into().into();
+        let mut is_volatile = is_volatile.into().into();
         unsafe {
             Self::ref_from_raw(BNCreatePointerType(
                 arch.as_ref().0,
@@ -1926,6 +1958,22 @@ impl Structure {
 
     pub fn width(&self) -> u64 {
         unsafe { BNGetStructureWidth(self.handle) }
+    }
+
+    pub fn packed(&self) -> bool {
+        unsafe { BNIsStructurePacked(self.handle) }
+    }
+
+    pub fn alignment(&self) -> usize {
+        unsafe { BNGetStructureAlignment(self.handle) }
+    }
+
+    pub fn propagate_data_var_refs(&self) -> bool {
+        unsafe { BNStructurePropagatesDataVariableReferences(self.handle) }
+    }
+
+    pub fn pointer_offset(&self) -> i64 {
+        unsafe { BNGetStructurePointerOffset(self.handle) }
     }
 
     pub fn structure_type(&self) -> StructureType {
